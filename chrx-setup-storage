@@ -6,7 +6,6 @@
 #                     Source functions                                                                         #
 ################################################################################################################
 CHRX_PROMPT_ENABLED=1
-CHRX_TARGET_DISK=$(mount | grep '/mnt/stateful_partition ' | cut -d 'p' -f 1) # Give the main device
 
 ANSI_RED=$'\033[1;31m'
 ANSI_YEL=$'\033[1;33m'
@@ -47,110 +46,87 @@ prompt_if_interactive()
 }
 
 ### SRC FILE ###
+CHRX_TARGET_DISK="`rootdev -d -s`"
+echo_info "Setting up target disk ${CHRX_TARGET_DISK} partitions..."
+# Do partitioning (if we haven't already)
+ckern_size="`cgpt show -i 6 -n -s -q ${CHRX_TARGET_DISK}`"
+croot_size="`cgpt show -i 7 -n -s -q ${CHRX_TARGET_DISK}`"
+state_size="`cgpt show -i 1 -n -s -q ${CHRX_TARGET_DISK}`"
 
-if [ "${CHRX_TARGET_DISK}" ]; then
-  echo_info "Installing to target disk ${ANSI_WHT}${CHRX_TARGET_DISK}${ANSI_RST}"
+max_os_size=$((${state_size}/1024/1024/2))
+rec_os_size=$((${max_os_size} - 1))
+# If KERN-C and ROOT-C are one, we partition, otherwise assume they're what they need to be...
+if [ "${ckern_size}" = "1" -o "${croot_size}" = "1" ]; then
+  while :
+  do
+    cat <<- EOF
+
+How much disk space should we reserve for Linux?
+
+Choose between 5 and ${max_os_size} GB (recommended: ${rec_os_size}).
+
+EOF
+    echo_info "Enter size in GB [${rec_os_size}]: \c"
+    prompt_if_interactive
+    os_size=${PROMPT_RESPONSE}
+    [ -z "${os_size}" ] && os_size=${rec_os_size}
+    os_size_test=`echo ${os_size} | grep "^[0-9][0-9]*$"`
+    if [ -z "${os_size_test}" ]; then
+      echo_fail "\nNumbers only please!"
+      continue
+    fi
+    if [ ${os_size} -lt 5 -o ${os_size} -gt ${max_os_size} ]; then
+      echo_fail "\nPlease enter a number between 5 and ${max_os_size}!"
+      continue
+    fi
+    break
+  done
+
+  # We've got our size in GB for ROOT-C so do the math...
+
+  rootc_size=$((${os_size}*1024*1024*2)) # sector size for rootc
+  kernc_size=65536 ## KERN-C IS 2*16MB ##
+
+  #new stateful size with rootc and kernc subtracted from original
+  stateful_size=$((${state_size} - ${rootc_size} - ${kernc_size}))
+
+  #start stateful at the same spot it currently starts at
+  stateful_start="`cgpt show -i 1 -n -b -q ${CHRX_TARGET_DISK}`"
+
+  #start kernc at stateful start plus stateful size
+  kernc_start=$((${stateful_start} + ${stateful_size}))
+
+  #start rootc at kernc start plus kernc size
+  rootc_start=$((${kernc_start} + ${kernc_size}))
+
+  echo "  stateful_start ${stateful_start}"
+  echo "  stateful_size  ${stateful_size}"
+  echo "  kernc_start    ${kernc_start}"
+  echo "  kernc_size     ${kernc_size}"
+  echo "  rootc_start    ${rootc_start}"
+  echo "  rootc_size     ${rootc_size}"
+
+  ## Do the real work
+  echo_info "\n\nModifying partition table to make room for Linux."
+
+  umount -f /mnt/stateful_partition > /dev/null 2>&1
+  cgpt add -i 1 -b ${stateful_start} -s ${stateful_size} -l STATE ${CHRX_TARGET_DISK}
+  cgpt add -i 6 -b ${kernc_start} -s ${kernc_size} -l KERN-C -t "kernel" ${CHRX_TARGET_DISK}
+  cgpt add -i 7 -b ${rootc_start} -s ${rootc_size} -l ROOT-C ${CHRX_TARGET_DISK}
+
   cat <<- EOF
-	${ANSI_YEL}
-	  WARNING: All data on ${CHRX_TARGET_DISK} will be erased!
-	           Continue at your own risk!
-	${ANSI_RST}
-	EOF
+  ${ANSI_GRN}
+  Your Chromebook will reboot and clear your data.
 
-  echo_warn "Press [enter] to continue or CTRL-C to quit: \c"
+  Run chrx again to install Linux.
+  ${ANSI_RST}
+EOF
+  echo_warn "Press [enter] to continue: \c"
   prompt_if_interactive
 
-  echo_info "Setting up target disk ${CHRX_TARGET_DISK} formatting..."
-
-  set_root_partition 1
-
-  printf "g\nn\n\n\n\nw\n" | fdisk "${CHRX_TARGET_DISK}" > /dev/null
-  fdisk -l "${CHRX_TARGET_DISK}"
-
-  echo_info "OK"
-else
-  CHRX_TARGET_DISK="`rootdev -d -s`"
-  echo_info "Setting up target disk ${CHRX_TARGET_DISK} partitions..."
-  # Do partitioning (if we haven't already)
-  ckern_size="`cgpt show -i 6 -n -s -q ${CHRX_TARGET_DISK}`"
-  croot_size="`cgpt show -i 7 -n -s -q ${CHRX_TARGET_DISK}`"
-  state_size="`cgpt show -i 1 -n -s -q ${CHRX_TARGET_DISK}`"
-
-  max_os_size=$((${state_size}/1024/1024/2))
-  rec_os_size=$((${max_os_size} - 1))
-  # If KERN-C and ROOT-C are one, we partition, otherwise assume they're what they need to be...
-  if [ "${ckern_size}" = "1" -o "${croot_size}" = "1" ]; then
-    while :
-    do
-      cat <<- EOF
-
-	How much disk space should we reserve for Linux?
-
-	Choose between 5 and ${max_os_size} GB (recommended: ${rec_os_size}).
-
-	EOF
-      echo_info "Enter size in GB [${rec_os_size}]: \c"
-      prompt_if_interactive
-      os_size=${PROMPT_RESPONSE}
-      [ -z "${os_size}" ] && os_size=${rec_os_size}
-      os_size_test=`echo ${os_size} | grep "^[0-9][0-9]*$"`
-      if [ -z "${os_size_test}" ]; then
-        echo_fail "\nNumbers only please!"
-        continue
-      fi
-      if [ ${os_size} -lt 5 -o ${os_size} -gt ${max_os_size} ]; then
-        echo_fail "\nPlease enter a number between 5 and ${max_os_size}!"
-        continue
-      fi
-      break
-    done
-
-    # We've got our size in GB for ROOT-C so do the math...
-
-    rootc_size=$((${os_size}*1024*1024*2)) # sector size for rootc
-    kernc_size=65536 ## KERN-C IS 2*16MB ##
-
-    #new stateful size with rootc and kernc subtracted from original
-    stateful_size=$((${state_size} - ${rootc_size} - ${kernc_size}))
-
-    #start stateful at the same spot it currently starts at
-    stateful_start="`cgpt show -i 1 -n -b -q ${CHRX_TARGET_DISK}`"
-
-    #start kernc at stateful start plus stateful size
-    kernc_start=$((${stateful_start} + ${stateful_size}))
-
-    #start rootc at kernc start plus kernc size
-    rootc_start=$((${kernc_start} + ${kernc_size}))
-
-    echo "  stateful_start ${stateful_start}"
-    echo "  stateful_size  ${stateful_size}"
-    echo "  kernc_start    ${kernc_start}"
-    echo "  kernc_size     ${kernc_size}"
-    echo "  rootc_start    ${rootc_start}"
-    echo "  rootc_size     ${rootc_size}"
-
-    ## Do the real work
-    echo_info "\n\nModifying partition table to make room for Linux."
-
-    umount -f /mnt/stateful_partition > /dev/null 2>&1
-    cgpt add -i 1 -b ${stateful_start} -s ${stateful_size} -l STATE ${CHRX_TARGET_DISK}
-    cgpt add -i 6 -b ${kernc_start} -s ${kernc_size} -l KERN-C -t "kernel" ${CHRX_TARGET_DISK}
-    cgpt add -i 7 -b ${rootc_start} -s ${rootc_size} -l ROOT-C ${CHRX_TARGET_DISK}
-
-    cat <<- EOF
-		${ANSI_GRN}
-		Your Chromebook will reboot and clear your data.
-
-		Run chrx again to install Linux.
-		${ANSI_RST}
-		EOF
-    echo_warn "Press [enter] to continue: \c"
-    prompt_if_interactive
-
-    ## reboot without dropping user to shell
-    reboot
-    sleep 10
-    exit
-  fi
+  ## reboot without dropping user to shell
+  reboot
+  sleep 10
+  exit
 fi
 
