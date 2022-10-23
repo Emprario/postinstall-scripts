@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import json
+import argparse
+from urllib.error import URLError
+from urllib.request import urlretrieve, urlopen
+
+from functions import *
+
+
+def disclamer():
+    """A disclamer to prevent user setup dual-boot if all requirments are not satisfied"""
+    ## chrx
+    print_warning("Make sure, you chrx your chromebook before executing this.")
+    print_warning("Press 'enter' to continue, Press Ctrl+C to cancel ...")
+    chrx=input()
+    if chrx !="\n":
+        print_error("Arbort opperation.")
+        exit(1)
+    
+    ## Enough space
+    print_warning("Make sure, you create enough space on your chromebook before executing this.")
+    print_warning(f"Here the free space you have : {bash('fdisk -l /dev/nvme0n1p7')}")
+    print_warning("Press 'enter' to continue, Press Ctrl+C to cancel ...")
+    space=input()
+    if space !="\n":
+        print_error("Arbort opperation.")
+        exit(1)
+
+# parse arguments from the cli.
+def process_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", default=False, help="Print more output")
+    return parser.parse_args()
+
+
+# Prepare host
+def prepare_host() -> None:
+    print_status("Preparing host system")
+
+    rmfile("kernel.flags")
+
+    # Install parted
+    if not path_exists("/usr/sbin/parted"):
+        print_status("Installing parted")
+        if path_exists("/usr/bin/apt"):  # Ubuntu + debian
+            bash("apt-get install parted -y")
+        elif path_exists("/usr/bin/pacman"):  # Arch
+            # install parted
+            bash("pacman -S parted --noconfirm")
+
+        elif path_exists("/usr/bin/dnf"):  # Fedora
+            bash("dnf install parted --assumeyes")  # cgpt is included in vboot-utils on fedora
+        elif path_exists("/usr/bin/zypper"):  # openSUSE
+            bash("zypper --non-interactive install parted")
+        else:
+            print_warning("Parted not found, please install it using your distros package manager")
+            exit(1)
+
+
+# Configure distro agnostic options
+def partition_and_flash():
+    print_status("Preparing to install to internal storage")
+    # unmount all internal partitions
+    try:
+        bash(f"umount -lf {internal_name}*")
+    except subprocess.CalledProcessError:
+        pass
+
+    # ask user for final confirmation
+    input("\033[92m" + "Are you absolutely sure you want to wipe your internal drive and install Depthboot to it? Enter"
+                       " to continue or Ctrl+C to abort" + "\033[0m")
+
+    # format as per depthcharge requirements,
+    # READ: https://wiki.gentoo.org/wiki/Creating_bootable_media_for_depthcharge_based_devices
+    # TODO: find how grow up the kernel
+    #   bash(f"parted -s -a optimal {internal_name} unit mib mkpart Kernel 1 65")  # kernel partition
+    bash(f"cgpt add -i 6 -t kernel -S 1 -T 1 -P 15 {internal_name}")  # depthcharge flags
+
+    # get uuid of froots partition
+    rootfs_partuuid = bash(f"blkid -o value -s PARTUUID {internal_name}p7")
+
+    # read current cmdline and update its partuuid
+    with open("/proc/cmdline", "r") as flags:
+        old_cmdline = flags.read()[12:]  # remove cros_secure from the start
+    # replace partuuid with the new one
+    cmdline_start = old_cmdline.find("root=PARTUUID=") + 14
+    cmdline_end = cmdline_start + 36
+    new_cmdline = old_cmdline[:cmdline_start] + rootfs_partuuid + old_cmdline[cmdline_end:]
+    with open("kernel.flags", "w") as config:
+        config.write(new_cmdline)
+
+    print_status(f"New cmdline: {new_cmdline}")
+
+    # Copy usb kernel partition
+    kernel_partition = f"{src_device}1"
+    bash(f"dd if={kernel_partition} of=usb_kernel")
+
+    print_status("Signing kernel")
+    bash("futility vbutil_kernel --repack internal_kernel --version 1 --keyblock " +
+         "/usr/share/vboot/devkeys/kernel.keyblock --signprivate /usr/share/vboot/devkeys/kernel_data_key.vbprivk " +
+         "--oldblob usb_kernel --config kernel.flags")
+    print_status("Flashing updated kernel")
+    bash(f'sudo dd if=internal_kernel of={internal_name}p6')
+
+    print_status("Formatting internal rootfs part")
+    # Create rootfs ext4 partition
+    bash(f"yes 2>/dev/null | mkfs.ext4 {internal_name}p7")  # 2>/dev/null is to supress yes broken pipe warning
+
+    print_status("Copying rootfs to internal storage")
+    mkdir("/mnt/internal")
+    bash(f"sudo mount {internal_name}p7 /mnt/internal")
+    bash(f'rsync -aHAXErp --progress --exclude=/mnt/internal --exclude=/tmp --exclude=/dev --exclude=/sys --exclude=/proc --exclude=/run / /mnt/internal')
+    bash('umount /mnt/internal')
+
+# Force internal to resize on first boot
+def post_copy() -> None:
+    # Mount internal rootfs
+    mkdir("/mnt/depthboot-internal")
+    bash(f"mount {internal_name}p7 /mnt/depthboot-internal")
+
+    # set build type to image in depthboot settings
+    with open("/mnt/depthboot-internal/etc/eupnea.json", "r") as settings_file:
+        settings = json.load(settings_file)
+    settings["install_type"] = "internal"
+    with open("/mnt/depthboot-internal/etc/eupnea.json", "w") as settings_file:
+        json.dump(settings, settings_file)
+
+    # add postconfig service hook
+    print_status("Adding postinstall service")
+    cpfile("/etc/eupnea/postinstall.service", "/mnt/depthboot-internal/etc/systemd/system/postinstall.service")
+    chroot("systemctl enable postinstall.service")
+
+
+# chroot command
+def chroot(command: str) -> str:
+    return bash(f'chroot /mnt/depthboot-internal /bin/sh -c "{command}"')
+
+
+if __name__ == "__main__":
+    if os.geteuid() == 0 and not path_exists("/tmp/.root_ok"):
+        print_error("Please start the script as non-root/without sudo")
+        exit(1)
+
+    args = process_args()
+
+    # Restart script as root
+    if not os.geteuid() == 0:
+        # install kernel packages before elevating to root, as makepkg needs to be run as non-root
+        install_kernel_packages()
+        # create empty file to confirm script was started as non-root
+        with open("/tmp/.root_ok", "w") as file:
+            file.write("")
+        sudo_args = ['sudo', sys.executable] + sys.argv + [os.environ]
+        os.execlpe('sudo', *sudo_args)
+
+    # delete file to confirm script was started as root
+    rmfile("/tmp/.root_ok")
+
+    if args.verbose:
+        print_warning("Verbosity increased")
+        set_verbose(args.verbose)  # enable verbose output in functions.py
+
+    disclamer()
+
+    prevent_idle()
+    prepare_host()
+
+    # read root partition mount
+    root_part = bash("mount | grep ' / ' | cut -d' ' -f 1")
+    src_device = root_part[:-1]  # get usb device "name"
+
+    # get internal storage name
+    while True:
+        storage_array = []
+        lsblk_out = bash("lsblk -nd -o NAME,MODEL,SIZE,TRAN").splitlines()
+        for line in lsblk_out:
+            if not line.find("mmcblk") == -1 or not line.find("nvme") == -1:
+                storage_array.append(line[:7].strip())  # get actual device name
+                break
+        if len(storage_array) == 0:
+            print_error("No internal storage found... Please create an issue")
+            exit(1)
+        elif not len(storage_array) == 1:
+            for line in storage_array:
+                print(line)
+            internal_name = input(
+                "\033[92m" + 'Multiple storages found, which one should be used?(example: mmcblk0): ' +
+                "\033[0m" + "\n").strip()
+            if internal_name in storage_array:
+                # add /dev/ to device name, if needed
+                if not internal_name.startswith("/dev/"):
+                    internal_name = f"/dev/{internal_name}"
+                print_status(f"{internal_name} selected")
+                break
+            else:
+                print_warning("No such device, please try again")
+                continue
+        else:
+            internal_name = storage_array[0]
+            # add /dev/ to device name, if needed
+            if not internal_name.startswith("/dev/"):
+                internal_name = f"/dev/{internal_name}"
+            print_status(f"{internal_name} selected")
+            break
+
+    partition_and_flash()
+    post_copy()
+    print_header("Install successful")
+    print_header("You can now boot Depthboot from internal storage")
+
