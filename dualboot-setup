@@ -13,7 +13,7 @@ from functions import *
 def disclamer():
     """A disclamer to prevent user setup dual-boot if all requirments are not satisfied"""
     ## chrx
-    print_warning("Make sure, you chrx your chromebook before executing this.")
+    print_warning("Make sure, you use the CUSTOM chrx to resize parttions on your chromebook before executing this.")
     print_warning("Press 'enter' to continue, Press Ctrl+C to cancel ...")
     chrx=input()
     if chrx !="\n":
@@ -75,8 +75,6 @@ def partition_and_flash():
 
     # format as per depthcharge requirements,
     # READ: https://wiki.gentoo.org/wiki/Creating_bootable_media_for_depthcharge_based_devices
-    # TODO: find how grow up the kernel
-    #   bash(f"parted -s -a optimal {internal_name} unit mib mkpart Kernel 1 65")  # kernel partition
     bash(f"cgpt add -i 6 -t kernel -S 1 -T 1 -P 15 {internal_name}")  # depthcharge flags
 
     # get uuid of froots partition
