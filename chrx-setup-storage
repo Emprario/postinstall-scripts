@@ -5,6 +5,17 @@
 ################################################################################################################
 #                     Source functions                                                                         #
 ################################################################################################################
+CHRX_PROMPT_ENABLED=1
+CHRX_TARGET_DISK=$(mount | grep '/mnt/stateful_partition ' | cut -d 'p' -f 1) # Give the main device
+
+ANSI_RED=$'\033[1;31m'
+ANSI_YEL=$'\033[1;33m'
+ANSI_GRN=$'\033[1;32m'
+ANSI_VIO=$'\033[1;35m'
+ANSI_BLU=$'\033[1;36m'
+ANSI_WHT=$'\033[1;37m'
+ANSI_RST=$'\033[0m'
+
 echo_cmd()    { echo -e "${ANSI_BLU}${@}${ANSI_RST}"; }
 echo_note()   { echo -e "${ANSI_YEL}${@}${ANSI_RST}"; }
 echo_info()   { echo -e "${ANSI_GRN}${@}${ANSI_RST}"; }
@@ -36,19 +47,6 @@ prompt_if_interactive()
 }
 
 ### SRC FILE ###
-
-eval_try umount -R ${CHRX_INSTALL_ROOT} 2>/dev/null ## be safe.
-
-set_root_partition() {
-  pnum=$1
-
-  case "$CHRX_TARGET_DISK" in
-    /dev/sd*)     CHRX_ROOT_PARTITION="${CHRX_TARGET_DISK}${pnum}" ;;
-    /dev/mmcblk*) CHRX_ROOT_PARTITION="${CHRX_TARGET_DISK}p${pnum}" ;;
-    /dev/nvme*)   CHRX_ROOT_PARTITION="${CHRX_TARGET_DISK}p${pnum}" ;;
-    *) echo_fail "\nunrecognized disk device: \"$CHRX_TARGET_DISK\"!"; exit 1 ;;
-  esac
-}
 
 if [ "${CHRX_TARGET_DISK}" ]; then
   echo_info "Installing to target disk ${ANSI_WHT}${CHRX_TARGET_DISK}${ANSI_RST}"
