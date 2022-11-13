@@ -8,19 +8,25 @@ from functions import *
 
 # Expand root partition to whole drive
 def expand_rootfs() -> None:
-    if install_type == "image" or install_type == "internal":  # do not resize on direct installs
+    with open("/etc/eupnea.json", "r") as file:
+        eupnea_settings = json.load(file)
+    if eupnea_settings["install_type"] == "image":  # only resize on image installs
         # read root partition mount
         root_part = bash("mount | grep ' / ' | cut -d' ' -f 1")
         root_part = root_part[:-1]  # get device "name"
-        if install_type == "internal":
-            root_part = root_part[:-1]  # remove "p" from device name
-
-        bash(f"growpart {root_part} 2")  # grow root partition
-        bash(f"partprobe {root_part}")  # reload partition table
-        if install_type == "image":
+        if root_part[-1] == "p":  # internal drive / sd card has a "p" at the end
+            bash(f"growpart {root_part[:-1]} 2")  # grow root partition
+            bash(f"partprobe {root_part[:-1]}")  # reload partition table
             bash(f"resize2fs {root_part}2")  # expand root partition
-        elif install_type == "internal":
-            bash(f"resize2fs {root_part}p2")  # expand root partition
+        else:  # usb drive
+            bash(f"growpart {root_part} 3")  # grow root partition
+            bash(f"partprobe {root_part}")  # reload partition table
+            bash(f"resize2fs {root_part}3")  # expand root partition
+
+        # set install type to direct to prevent postinstall from expanding again
+        eupnea_settings["install_type"] = "expanded-image"
+        with open("/etc/eupnea.json", "w") as file:
+            json.dump(eupnea_settings, file)
 
 
 # This only pinns browser and software manager to the dock and removes mounted drives from it. NOTHING ELSE IS MODIFIED
@@ -65,6 +71,29 @@ def device_fixes() -> None:
                  "/usr/share/alsa/ucm2/conf.d/acp3xalc5682m98/acp3xalc5682m98.conf")
 
 
+def distro_fixes() -> None:
+    with open("/etc/eupnea.json", "r") as file:
+        eupnea_json = json.load(file)
+
+    match eupnea_json["distro_name"]:
+        case "fedora":
+            # Relabel files that couldn't be relabeled during install
+            bash("fixfiles relabel /lib/systemd/system-generators/systemd-gpt-auto-generator")
+        case "ubuntu":
+            if eupnea_json["de_name"] == "deepin":
+                # When installing from chroot the kernel modules are not installed
+                # Therefore the modules are installed when booting for the first time
+                bash("apt-get install -y ubuntudde-dde")
+
+
+def set_hostname() -> None:
+    # Get the board name from dmi
+    with open("/sys/devices/virtual/dmi/id/product_name", "r") as dmi:
+        device_board = dmi.read().lower().strip()
+    # Set hostname
+    bash(f"hostnamectl hostname {device_board}")
+
+
 if __name__ == "__main__":
     # Elevate script to root
     if not os.geteuid() == 0:
@@ -73,14 +102,10 @@ if __name__ == "__main__":
 
     set_verbose(True)  # always run verbose
 
-    with open("/etc/eupnea.json", "r") as file:
-        install_type = json.load(file)["install_type"]
-
     expand_rootfs()
     # customize_gnome()
     device_fixes()
+    set_hostname()
 
-    # delete postinstall systemd service
+    # disable postinstall systemd service
     bash("systemctl disable postinstall.service")
-    cpfile("/etc/systemd/system/postinstall.service", "/etc/systemd/system/postinstall.service.disabled")
-    rmfile("/etc/systemd/system/postinstall.service")
