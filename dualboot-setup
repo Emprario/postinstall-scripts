@@ -16,7 +16,7 @@ def disclamer():
     print_warning("Make sure, you use the CUSTOM chrx to resize parttions on your chromebook before executing this.")
     print_warning("Press 'enter' to continue, Press Ctrl+C to cancel ...")
     chrx=input()
-    if chrx !="\n":
+    if chrx !="":
         print_error("Arbort opperation.")
         exit(1)
     
@@ -25,7 +25,7 @@ def disclamer():
     print_warning(f"Here the free space you have : {bash('fdisk -l /dev/nvme0n1p7')}")
     print_warning("Press 'enter' to continue, Press Ctrl+C to cancel ...")
     space=input()
-    if space !="\n":
+    if space !="":
         print_error("Arbort opperation.")
         exit(1)
 
