@@ -75,7 +75,7 @@ def partition_and_flash():
 
     # format as per depthcharge requirements,
     # READ: https://wiki.gentoo.org/wiki/Creating_bootable_media_for_depthcharge_based_devices
-    bash(f"cgpt add -i 6 -t kernel -S 1 -T 1 -P 15 {internal_name}")  # depthcharge flags
+    #bash(f"cgpt add -i 6 -t kernel -S 1 -T 1 -P 15 {internal_name}")  # depthcharge flags
 
     # get uuid of froots partition
     rootfs_partuuid = bash(f"blkid -o value -s PARTUUID {internal_name}p7")
@@ -127,9 +127,9 @@ def post_copy() -> None:
         json.dump(settings, settings_file)
 
     # add postconfig service hook
-    print_status("Adding postinstall service")
-    cpfile("/etc/eupnea/postinstall.service", "/mnt/depthboot-internal/etc/systemd/system/postinstall.service")
-    chroot("systemctl enable postinstall.service")
+    #print_status("Adding postinstall service")
+    #cpfile("/etc/eupnea/postinstall.service", "/mnt/depthboot-internal/etc/systemd/system/postinstall.service")
+    #chroot("systemctl enable postinstall.service")
 
 
 # chroot command
