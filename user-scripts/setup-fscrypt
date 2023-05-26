@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import sys
+
+sys.path.insert(0, "/usr/lib/eupnea")
+from functions import *
+
+# The purpose of this script is to setup fscrypt with PAM as mean of encryption of home folder
+
+# parse arguments from the cli.
+def process_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-f", "--first-run_on", action="store_true", dest="first_run", default=None,
+                        help="Will install all necessary packages needed and set the provided storage to encrypt state")
+    parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", default=False, 
+                        help="Print more output")
+    parser.add_argument("-p", "--path", action="store", dest="path", default=os.path.expanduser('~'),
+                        help="Will encrypt folder")
+    parser.add_argument("-p","--password", action="store", dest="passwd", default=None, 
+                        help="(NOT RECOMMENDED) Give the passwd as an argument instead of asking while the command is running")
+    return parser.parse_args()
+
+def preparations(internal:str):
+    """
+    Prepare fscrypt for configuration, 'internal' is the path to the internal storage.
+    Configure fscrypt to be used with PAM module
+    """
+    # get internal storage name
+    bash("tune2fs -O encrypt " + internal)
+    bash("fscrypt setup --force")
+    with open("/etc/pam.d/system-login",'w') as pam_config:
+        pam_w = pam_config.readlines()
+        pam_w.insert(2,"auth       optional   pam_fscrypt.so\n")
+        pam_w.insert(12,"session    [success=1 default=ignore]  pam_succeed_if.so  service = systemd-user quiet\n" \
+                        "session    optional                    pam_fscrypt.so\n")
+        pam_config.write("".join(pam_w))
+    with open("/etc/pam.d/passwd",'a') as pam_passwd:
+        pam_passwd.write("password    optional    pam_fscrypt.so")
+
+def setup_current():
+    """Supposed to be run by the end user to convert a default regular home folder to an encrypted home folder"""
+    pass
+
+def setup_custom(path:str):
+    """Supposed to be run by this script to encrypt a custom (empty) folder"""
+    pass
+
+if __name__=="__main__":
+    args = process_args()
+
+    # Restart script as root
+    if os.geteuid() != 0:
+        sudo_args = ['sudo', sys.executable] + sys.argv + [os.environ]
+        os.execlpe('sudo', *sudo_args)
+    
+    set_verbose(args.verbose)
+    
+    if args.first_run:
+        preparations(bash("mount | grep ' / '").split(" ")[0])
+    
