@@ -16,8 +16,8 @@ def process_args():
     parser.add_argument("-v", "--verbose", action="store_true", dest="verbose", default=False, 
                         help="Print more output")
     parser.add_argument("-p", "--path", action="store", dest="path", default=os.path.expanduser('~'),
-                        help="Will encrypt folder")
-    parser.add_argument("-p","--password", action="store", dest="passwd", default=None, 
+                        help="Will encrypt this folder")
+    parser.add_argument("-w","--password", action="store", dest="passwd", default=None, 
                         help="(NOT RECOMMENDED) Give the passwd as an argument instead of asking while the command is running")
     return parser.parse_args()
 
@@ -26,31 +26,61 @@ def preparations(internal:str):
     Prepare fscrypt for configuration, 'internal' is the path to the internal storage.
     Configure fscrypt to be used with PAM module
     """
+    # install package
+    if not Path("/usr/bin/fscrypt").exists() and Path("/usr/bin/pacman").exists():
+        bash("pacman -Syy")
+        bash("pacman -S  --noconfirm fscrypt")
+    elif not Path("/usr/bin/fscrypt").exists() and Path("/usr/bin/apt").exists():
+        bash("apt update")
+        bash("apt install -y fscrypt libpam-fscrypt")
+    elif not Path("/usr/bin/fscrypt").exists() and Path("/usr/bin/dnf").exists():
+        print_error("Not available yet, coming soon")
+        exit(1)
+
     # get internal storage name
     bash("tune2fs -O encrypt " + internal)
     bash("fscrypt setup --force")
-    with open("/etc/pam.d/system-login",'w') as pam_config:
-        pam_w = pam_config.readlines()
-        pam_w.insert(2,"auth       optional   pam_fscrypt.so\n")
-        pam_w.insert(12,"session    [success=1 default=ignore]  pam_succeed_if.so  service = systemd-user quiet\n" \
-                        "session    optional                    pam_fscrypt.so\n")
-        pam_config.write("".join(pam_w))
-    with open("/etc/pam.d/passwd",'a') as pam_passwd:
-        pam_passwd.write("password    optional    pam_fscrypt.so")
 
-def setup_current():
-    """Supposed to be run by the end user to convert a default regular home folder to an encrypted home folder"""
-    pass
+    # configure (postinstall)
+    with open("/etc/os-release", "r") as file:
+        os_release = file.read().lower()
+    if "Arch Linux" in os_release:
+        with open("/etc/pam.d/system-login",'w') as pam_config:
+            pam_w = pam_config.readlines()
+            pam_w.insert(2,"auth       optional   pam_fscrypt.so\n")
+            pam_w.insert(12,"session    [success=1 default=ignore]  pam_succeed_if.so  service = systemd-user quiet\n" \
+                            "session    optional                    pam_fscrypt.so\n")
+            pam_config.write("".join(pam_w))
+        with open("/etc/pam.d/passwd",'a') as pam_passwd:
+            pam_passwd.write("password    optional    pam_fscrypt.so")
+    elif "Fedora Linux" in os_release:
+        pass
 
-def setup_custom(path:str):
-    """Supposed to be run by this script to encrypt a custom (empty) folder"""
-    pass
+def setup_on_path(path:str):
+    """encrypt an empty folder"""
+    encrypted_path = "/tmp/eupnea-fscrypt/encrypted"
+    mkdir(encrypted_path)
+    bash("fscrypt encrypt "+encrypted_path+" --user="+Path(path).owner())
+    bash("mv "+path+" "+encrypted_path)
+    rmdir(path,False)
+    bash("mv "+encrypted_path+" "+path)
+
+
 
 if __name__=="__main__":
     args = process_args()
 
+    if "/root" == args.path and os.geteuid() == 0 and not path_exists("/tmp/path"):
+        print_error("Please start the script as non-root/without sudo (or renseign the path you want to encrypt)")
+        exit(1)
+
     # Restart script as root
     if os.geteuid() != 0:
+        # save username and home path
+        with open("/tmp/path", "w") as file:
+            # get non-root username. os.getlogin() seems to fail in chroots
+            file.write(args.path)
+        
         sudo_args = ['sudo', sys.executable] + sys.argv + [os.environ]
         os.execlpe('sudo', *sudo_args)
     
@@ -58,4 +88,12 @@ if __name__=="__main__":
     
     if args.first_run:
         preparations(bash("mount | grep ' / '").split(" ")[0])
+    
+    with open("/tmp/path",'r') as user:
+        args.path = user.read()
+    setup_on_path(args.path)
+
+
+    set_verbose(True)
+    bash("fscrypt status \""+ args.path +"\"")
     
