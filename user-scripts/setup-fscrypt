@@ -110,6 +110,7 @@ if __name__=="__main__":
                 print_header("Encryption of home folder register successfully! Reboot to finish setup.")
                 print_warning("The next boot might be taking a while since your home folder will be moved to another location")
                 input("\033[92m" + "Press ENTER to reboot (CTRL+C to cancel the operation : NOT RECOMENDED)" + "\033[0m")
+                bash("systemctl enable eupnea-fscrypt.service")
                 bash("reboot")
                 sleep(5)
                 exit(0)
