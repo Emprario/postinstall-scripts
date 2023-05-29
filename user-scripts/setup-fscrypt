@@ -17,8 +17,12 @@ def process_args():
                         help="Print more output")
     parser.add_argument("-p", "--path", action="store", dest="path", default=os.path.expanduser('~'),
                         help="Will encrypt this folder")
-    parser.add_argument("-w","--password", action="store", dest="passwd", default=None, 
+    parser.add_argument("-c","--clean-cache", action="store_true", dest="clean", default=False,
+                        help="Clean the cache of the setup-fscrypt (may be usefull if setup-fscrypt was interupt)")
+    parser.add_argument("--password", action="store", dest="passwd", default=None, 
                         help="(NOT RECOMMENDED) Give the passwd as an argument instead of asking while the command is running")
+    parser.add_argument("--as-a-service", action="store_true", dest="service", default=False, 
+                        help="(NOT RECOMMENDED) Force the script to run whatever is it safe or not")
     return parser.parse_args()
 
 def preparations(internal:str):
@@ -54,7 +58,8 @@ def preparations(internal:str):
         with open("/etc/pam.d/passwd",'a') as pam_passwd:
             pam_passwd.write("password    optional    pam_fscrypt.so")
     elif "Fedora Linux" in os_release:
-        pass
+        print_error("Not available yet, coming soon")
+        exit(1)
 
 def setup_on_path(path:str):
     """encrypt an empty folder"""
@@ -70,16 +75,21 @@ def setup_on_path(path:str):
 if __name__=="__main__":
     args = process_args()
 
-    if "/root" == args.path and os.geteuid() == 0 and not path_exists("/tmp/path"):
+    if args.clean:
+        rmfile("/usr/lib/eupnea/tmp-path.lk")
+        print_status("Cache file cleaned succesfully !")
+        exit(0)
+
+    if "/root" == args.path and os.geteuid() == 0 and not path_exists("/usr/lib/eupnea/tmp-path.lk"):
         print_error("Please start the script as non-root/without sudo (or renseign the path you want to encrypt)")
         exit(1)
 
     # Restart script as root
     if os.geteuid() != 0:
         # save username and home path
-        with open("/tmp/path", "w") as file:
+        with open("/usr/lib/eupnea/tmp-path.lk", "w") as file:
             # get non-root username. os.getlogin() seems to fail in chroots
-            file.write(args.path)
+            file.write(args.path+","+bash("whoami").strip())
         
         sudo_args = ['sudo', sys.executable] + sys.argv + [os.environ]
         os.execlpe('sudo', *sudo_args)
@@ -89,9 +99,31 @@ if __name__=="__main__":
     if args.first_run:
         preparations(bash("mount | grep ' / '").split(" ")[0])
     
-    with open("/tmp/path",'r') as user:
-        args.path = user.read()
-    setup_on_path(args.path)
+    with open("/usr/lib/eupnea/tmp-path.lk",'r') as user:
+        args.path,username = user.read().split(",")
+    if args.path == "/home/"+username or args.path == "/home/"+username+"/":
+        if args.service:
+            rmfile("/usr/lib/eupnea/tmp-path.lk")
+            setup_on_path(args.path)
+        else:
+            try:
+                print_header("Encryption of home folder register successfully! Reboot to finish setup.")
+                print_warning("The next boot might be taking a while since your home folder will be moved to another location")
+                input("\033[92m" + "Press ENTER to reboot (CTRL+C to cancel the operation : NOT RECOMENDED)" + "\033[0m")
+                bash("reboot")
+                sleep(5)
+                exit(0)
+            except KeyboardInterrupt:
+                rmfile("/usr/lib/eupnea/tmp-path.lk")
+                print_status("Operation canceled successfully !")
+                exit(0)
+    elif args.path[:7+len(username)] == "/home/"+username+"/": # in home folder
+        rmfile("/usr/lib/eupnea/tmp-path.lk")
+        setup_on_path(args.path)
+    else:
+        rmfile("/usr/lib/eupnea/tmp-path.lk")
+        print_error("No other location rather than /home/*/ should be avoided !")
+        exit(1)
 
 
     set_verbose(True)

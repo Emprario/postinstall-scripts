@@ -1,0 +1,13 @@
+[Unit]
+Description=Eupnea fscrypt delay script
+# Further description:
+# This script is run in order to setup fscrypt on home directory
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/setup-fscrypt -v --as-a-service
+RemainAfterExit=false
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
